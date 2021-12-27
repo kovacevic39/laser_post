@@ -5,20 +5,20 @@
 This post processor outputs gcode for laser control, it should work  
 with most gcode lasers.
 
-Defaults:  
+**Defaults:**  
 - Z axis moves are removed  
 - M5 is added before all rapid moves  
 - M3 S##### is added before each group of motion controlled moves.
 
 The following command line options have been added:
 
---laser-on Overrides the defalt "M3" command for laser on.
+<code>--laser-off</code> Overrides the default "M5" command for laser off.
 
---laser-no-s Suppresses the "S" word after the on command.
+<code>--laser-on</code> Overrides the defalt "M3" command for laser on.
 
---laser-off Overrides the default "M5" command for laser off.
+<code>--no-s</code> Suppresses "S" values after the laser on command.
 
---laser-3d Allows Z moves but only turns the laser on if there is motion in X Y.  
+<code>--laser-3d</code> Allows Z moves but only turns the laser on if there is motion in X Y.  
     So this can be used to cut over contours or step up or down between cuts.
   
   Use ";" for newlines.  
