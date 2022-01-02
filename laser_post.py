@@ -328,9 +328,10 @@ def laser_gcode(gcode, filename):
         if line == last_line: # Remove any duplicate lines.
             continue
 
-        # Remove G0 commands with Z moves if 2d laser.
+        # Remove G0 commands that only have Z moves if 2d laser.
         if 'Z' in line and 'G0' in line and not LASER_3D:
-            continue
+            if 'X' not in line and 'Y' not in line:
+                continue
 
         # Remove unwanted M6 command. Tool changes add unwanted laser on commands.
         if 'M6' in line:
@@ -400,7 +401,7 @@ def laser_gcode(gcode, filename):
                     gfile.write(linenumber() + LASER_ON + " " + LASER_POWER + "\n")
                     isLaserOn = True
 
-        # 2d laser output all Z moves are removed.
+        # 2d laser output, all Z moves are removed.
         else:
             # Remove duplicate and redundant commands.
             if command == 'G0' and last_command in ['G0', 'G1', 'G2', 'G3'] and position == last_position:
