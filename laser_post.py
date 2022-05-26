@@ -279,6 +279,9 @@ def export(objectslist, filename, argstring):
     for line in POSTAMBLE.splitlines(True):
         gcode += linenumber() + line
 
+    ###### Reprocess the "raw" output for laser #######
+    gcode = laser_gcode(gcode, filename)
+
     if FreeCAD.GuiUp and SHOW_EDITOR:
         final = gcode
         if len(gcode) > 100000:
@@ -291,9 +294,6 @@ def export(objectslist, filename, argstring):
                 final = dia.editor.toPlainText()
     else:
         final = gcode
-
-    ###### Reprocess the "raw" output for laser #######
-    laser_gcode(gcode, filename)
 
 def laser_gcode(gcode, filename):
     # pylint: disable=global-statement
@@ -440,7 +440,15 @@ def laser_gcode(gcode, filename):
         gfile.write(linenumber() + new_gcode_line) # Write the line to file.
     gfile.close()
 
+    #read back the laser processed gcode so we can optionally display it
+    gfile = open(filename, "r")
+    gcode = gfile.read()
+    gfile.close()
+
     print("Done postprocessing.")
+
+    #return laser gcode
+    return gcode
 
 def linenumber():
     # pylint: disable=global-statement
