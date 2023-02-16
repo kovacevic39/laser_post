@@ -29,13 +29,21 @@ import Path
 import argparse
 import datetime
 import shlex
-from PathScripts import PostUtils
-from PathScripts import PathUtils
+
+try:
+    import Path.Post.Utils as PostUtils
+except:
+    pass
+
+try:
+    from PathScripts import PostUtils
+except:
+    pass
 
 TOOLTIP = '''
 Generate g-code from a Path that is compatible with a laser.
 import laser_post
-laser_post.export(object, "/path/to/file.ncc")
+laser_post.export(object, "/path/to/file.ncc", "")
 '''
 now = datetime.datetime.now()
 
@@ -276,6 +284,8 @@ def export(objectslist, filename, argstring):
                 final = dia.editor.toPlainText()
     else:
         final = gcode
+        
+    return final
 
 def laser_gcode(gcode, filename):
     # pylint: disable=global-statement
@@ -398,17 +408,6 @@ def laser_gcode(gcode, filename):
             # Turn laser on for feed controlled moves.
             elif command in ['G1', 'G2', 'G3'] and last_command == 'G0':
                 gfile.write(linenumber() + LASER_ON + " " + LASER_POWER + "\n")
-
-            # For some reason the output for G0 moves is sometimes modal. The code below adds the missing
-            # axis back in. This shouldn't really matter, it's mostly for aesthetics.
-            if 'G0' in new_gcode_line and 'X' in new_gcode_line and not 'Y' in new_gcode_line:
-                new_gcode_line = "G0 " + position[0] + " " + last_position[1] + "\n"
-                position[1] = last_position[1]
-
-            elif 'G0' in new_gcode_line and 'Y' in new_gcode_line and not 'X' in new_gcode_line:
-                new_gcode_line = "G0 " + last_position[0] + " " + position[1] + "\n"
-                position[0] = last_position[0]
-
 
         last_feed = feed
         last_line = line
