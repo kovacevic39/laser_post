@@ -22,12 +22,21 @@
 # *                                                                         *
 # ***************************************************************************
 
-from __future__ import print_function
+TOOLTIP = '''
+Generate g-code that is compatible with a laser.
+import laser_post
+laser_post.export(object, "/path/to/file.ncc", "")
+'''
+
+#   This postprocessor imports an existing "stock" postprocessor to generate gcode
+#   as a starting point for further customization and formatting.
+
+#   The export() function in this file is the entry point.
+
 import FreeCAD
-from FreeCAD import Units
-import Path
+import linuxcnc_post
+import re
 import argparse
-import datetime
 import shlex
 
 try:
@@ -40,239 +49,329 @@ try:
 except:
     pass
 
-TOOLTIP = '''
-Generate g-code from a Path that is compatible with a laser.
-import laser_post
-laser_post.export(object, "/path/to/file.ncc", "")
-'''
-now = datetime.datetime.now()
+def init_variables():
 
-parser = argparse.ArgumentParser(prog='laser', add_help=False)
-parser.add_argument('--no-header', action='store_true', help='suppress header output')
-parser.add_argument('--no-comments', action='store_true', help='suppress comment output')
-parser.add_argument('--line-numbers', action='store_true', help='prefix with line numbers')
-parser.add_argument('--no-show-editor', action='store_true', help='don\'t pop up editor before writing output')
-parser.add_argument('--precision', default='3', help='number of digits of precision, default=3')
-parser.add_argument('--preamble', help='set commands to be issued before the first command, ";" for newline')
-parser.add_argument('--postamble', help='set commands to be issued after the last command, ";" for newline')
-parser.add_argument('--inches', action='store_true', help='Convert output for US imperial mode (G20)')
-parser.add_argument('--modal', action='store_true', help='If true, suppress command if the same as last command')
-parser.add_argument('--feed-non-modal', action='store_true', help='If true, output "F" values for all non rapid moves')
-parser.add_argument('--laser-3d', action='store_true', help='If --laser-3d is true format gcode for 3d laser.')
-parser.add_argument('--laser-off', help='Command used to turn laser off, use ";" for newline, default="M5"')
-parser.add_argument('--laser-on', help='Command used to turn laser on, use ";" for newline, default="M3"')
-parser.add_argument('--no-s', action='store_true', help='Don\'t output "S" values speed(laser power)')
-parser.add_argument('--output-k', action='store_true', help='Output "K" values, suppressed by default')
+    variables = dict(
 
-TOOLTIP_ARGS = parser.format_help()
+        PREAMBLE = "G17 G90",
+        POSTAMBLE = "M5\nG17 G90\nM2",
+        LASER_ON = "M3",
+        LASER_OFF = "M5",
+        LASER_POWER = "S0",
+        SHOW_EDITOR = True,
+        PRECISION = "3",
+        OUTPUT_LINE_NUMBERS = False,
+        LINENR = 100
 
-# These globals set common customization preferences
-OUTPUT_COMMENTS = True
-OUTPUT_HEADER = True
-OUTPUT_LINE_NUMBERS = False
-SHOW_EDITOR = True
-MODAL = False
-FEED_NON_MODAL = False  # if true, output F value for all non rapid moves.
-COMMAND_SPACE = " "
-LINENR = 100  # line number starting value
-LASER_3D = False
-LASER_POWER = "" # Don't edit this, use --laser-on or S value in tool controller.
-LASER_OFF = "M5"
-LASER_ON = "M3"
-NO_S = False
-OUTPUT_K = False
+        )
 
-# These globals will be reflected in the Machine configuration of the project
-UNITS = "G21"  # G21 for metric, G20 for us standard
-UNIT_SPEED_FORMAT = 'mm/min'
-UNIT_FORMAT = 'mm'
+    return variables
 
-PRECISION = 3
+def init_parser():
 
-# Preamble text will appear at the beginning of the GCODE output file.
-PREAMBLE = '''G17 G90
-'''
+    #   Initialises the parser with some custom tags to format TOOLTIP_ARGS and is intended
+    #   for use with the format_tooltips() function. See the bottom of this file
+    #   to see how it's used.
+    #   {sp} = 1 space, {tab} = 4 spaces , {nl} = newline
 
-# Postamble text will appear following the last operation.
-POSTAMBLE = '''M5
-M2
-'''
+    parser = argparse.ArgumentParser(prog='laser', add_help=False)
+    parser.add_argument('--no-header', action='store_true',
+                help = '{tab}Don\'t include header.{nl}')
 
-# Pre operation text will be inserted before every operation
-PRE_OPERATION = ''''''
+    parser.add_argument('--no-comments', action='store_true',
+                help = '{tab}Don\'t include comments.{nl}')
 
-# Post operation text will be inserted after every operation
-POST_OPERATION = ''''''
+    parser.add_argument('--line-numbers', action='store_true',
+                help = '{tab}Output line numbers.{nl}')
 
-# Tool Change commands will be inserted before a tool change
-TOOL_CHANGE = ''''''
+    parser.add_argument('--no-show-editor', action='store_true',
+                help = '{tab}Don\'t show editor after postprocess.{nl}')
 
-# to distinguish python built-in open function from the one declared below
-if open.__module__ in ['__builtin__','io']:
-    pythonopen = open
+    parser.add_argument('--inches', action='store_true',
+                help = '{tab}Output US imperial units.{nl}')
 
+    parser.add_argument('--precision',
+                help = '{tab}Decimal precision. Default is 3{nl}')
 
-def processArguments(argstring):
-    # pylint: disable=global-statement
-    global OUTPUT_HEADER
-    global OUTPUT_COMMENTS
-    global OUTPUT_LINE_NUMBERS
-    global SHOW_EDITOR
-    global PRECISION
-    global PREAMBLE
-    global POSTAMBLE
-    global UNITS
-    global UNIT_SPEED_FORMAT
-    global UNIT_FORMAT
-    global MODAL
-    global FEED_NON_MODAL
-    global LASER_3D
-    global LASER_OFF
-    global LASER_ON
-    global NO_S
-    global OUTPUT_K
+    parser.add_argument('--preamble',
+                help = '{nl}{tab}First commands written to gcode file, use \\n for newline.{nl}\
+                            {tab}{tab}Default is "G17 G90"{nl}')
 
-    try:
-        args = parser.parse_args(shlex.split(argstring))
-        if args.no_header:
-            OUTPUT_HEADER = False
-        if args.no_comments:
-            OUTPUT_COMMENTS = False
-        if args.line_numbers:
-            OUTPUT_LINE_NUMBERS = True
-        if args.no_show_editor:
-            SHOW_EDITOR = False
-        print("Show editor = %d" % SHOW_EDITOR)
-        PRECISION = args.precision
-        if args.preamble is not None:
-            PREAMBLE = args.preamble
-        if args.postamble is not None:
-            POSTAMBLE = args.postamble
-        if args.inches:
-            UNITS = 'G20'
-            UNIT_SPEED_FORMAT = 'in/min'
-            UNIT_FORMAT = 'in'
-            PRECISION = 4
-        if args.modal:
-            MODAL = True
-        if args.feed_non_modal:
-            FEED_NON_MODAL = True
-        if args.laser_3d:
-            LASER_3D = True
-        if args.laser_off is not None:
-            LASER_OFF = args.laser_off
-        if args.laser_on is not None:
-            LASER_ON = args.laser_on
-        if args.no_s:
-            NO_S = True
-        if args.output_k:
-            OUTPUT_K = True
+    parser.add_argument('--postamble',
+                help = '{nl}{tab}Last commands written to gcode file, use \\n for newline.{nl}\
+                            {tab}{tab}Default is "M5\\nG17 G90\\nM2"{nl}\
+                            {tab}{tab}{tab}M5{nl}\
+                            {tab}{tab}{tab}G17 G90{nl}\
+                            {tab}{tab}{tab}M2{nl}')
 
-    except Exception: # pylint: disable=broad-except
-        return False
+    parser.add_argument('--laser-on',
+                help = '{nl}{tab}Command to turn laser on, use \\n for newline.{nl}\
+                            {tab}{tab}Default is "M3"{nl}')
 
-    return True
+    parser.add_argument('--laser-off',
+                help = '{nl}{tab}Command to turn laser off, use \\n for newline.{nl}\
+                            {tab}{tab}Default is "M5"{nl}')
+
+    parser.add_argument('--laser-power',
+                help = '{nl}{tab}Laser power command, use \\n for newline.{nl}\
+                            {tab}{tab}Default is spindle speed "S####"{nl}\
+                            {tab}{tab}Use "NONE" or "" to supress any power commands.{nl}')
+    return parser
+
+def format_tooltips(tooltips):
+
+    #   This is a simple formatter for argparse help
+    space = " "
+    new_tooltips = ""
+
+    for line in tooltips.splitlines(True):
+        if "[" not in line:                 #leave the usage section alone
+            line = line.replace("\n", "")   #remove all newlines
+            line = re.sub(" +", " ", line)  #remove extra whitespace
+            line = line.replace("--", "\n --")  #add only one newline per arg
+            line = line.replace("{sp}", " ")    #add our own white space and newlines
+            line = line.replace("{tab}", "    ")
+            line = line.replace("{nl}", "\n")
+            line = line.replace("options:", "\noptions:")
+            new_tooltips += line
+        else:
+            new_tooltips += line
+
+    return new_tooltips
+
+def parse_args(variables, argstring, parser):
+
+    #   Process the arguments we are interested in and pass the rest
+    #   on to the imported postprocessor
+
+    new_argstring = "--no-show-editor " #suppress popup editor in the
+                                        #imported potprocessor
+    args = parser.parse_args(shlex.split(argstring))
+
+    if args.no_header:
+        new_argstring += "--no-header "
+
+    if args.no_comments:
+        new_argstring += "--no-comments "
+
+    if args.line_numbers:
+        variables["OUTPUT_LINE_NUMBERS"] = True
+
+    if args.no_show_editor:
+        variables["SHOW_EDITOR"] = False
+
+    if args.inches:
+        new_argstring += "--inches "
+
+    if args.precision is not None:
+        variables["PRECISION"] = args.precision
+        new_argstring += f'--precision {args.precision} '
+    else:
+        new_argstring += f'--precision {variables["PRECISION"]} '
+
+    #   Place markers in the initial gcode before reformat so we can
+    #   add newlines to the preamble and postamble.
+    #   We save the --preamble from the argstring and pass the markers on to
+    #   the imported postprocessor.
+    #   Don't use PREAMBLE or POSTAMBLE for markers, it confuses the parser.
+
+    if args.preamble is not None:
+        new_argstring += "--preamble TOP_MARKER "
+        variables["PREAMBLE"] = args.preamble.replace("\\n", '\n')
+    else:
+        new_argstring += f'--preamble """{variables["PREAMBLE"]}""" '
+
+    if args.postamble is not None:
+        new_argstring += "--postamble BOTTOM_MARKER "
+        variables["POSTAMBLE"] = args.postamble.replace("\\n", '\n')
+
+    else:
+        new_argstring += f'--postamble """{variables["POSTAMBLE"]}""" '
+
+    if args.laser_on is not None:
+        variables["LASER_ON"] = args.laser_on.replace("\\n", '\n')
+
+    if args.laser_off is not None:
+        variables["LASER_OFF"] = args.laser_off.replace("\\n", '\n')
+
+    if args.laser_power is not None:
+        args.laser_power = args.laser_power.replace("NONE", "")
+        variables["LASER_POWER"] = args.laser_power.replace("\\n", '\n')
+
+    return new_argstring
+
+def linenumber(variables):
+
+    if variables["OUTPUT_LINE_NUMBERS"] is True:
+        variables["LINENR"] += 10
+        return "N" + str(variables["LINENR"]) + " "
+    return ""
+
+def laser_gcode(gcode, variables):
+
+    nl = "\n"
+    laser_gcode = ""
+    prev_line = ""
+    temp_gcode = ""
+    cur_state = {"LASER":"ON", "G":"","X":"", "Y":"", "Z":"", "F":""}
+    prev_state = {"LASER":"ON", "G":"NULL", "X":"NULL", "Y":"NULL", "Z":"NULL", "F":"NULL"}
+    g_word = x_word = y_word = z_word = i_word = j_word = f_word = ""
+
+    #   Format imported postprocessor gcode.
+
+    for line in gcode.splitlines(True):
+
+        temp_line = ""
+
+        if "(" in line:             #just print comments if included
+            if "linuxcnc" in line:  #replace the imported postprocessor name with ours
+                line = line.replace("linuxcnc", "laser")
+            temp_gcode += line
+            continue
+
+    #   Store spindle speed for laser power if no command line arg has changed it.
+
+        if "S" in line and variables["LASER_POWER"] == "S0":
+            variables["LASER_POWER"] = (re.search(r"S.*?(?=\s)", line)).group()
+
+    #   Remove unwanted commands.
+
+        if "M3 " in line or "M6 " in line or "G43 " in line:
+            continue
+
+    #   Make sure laser off command matches LASER_OFF
+
+        if "M5\n" in line or "M5 " in line:
+            line = line.replace("M5", variables["LASER_OFF"])
+
+    #   Print custom preamble and postamble
+
+        if "TOP_MARKER" in line:
+            temp_gcode += f'{variables["PREAMBLE"]}{nl}'
+            continue
+
+        if "BOTTOM_MARKER" in line:
+            temp_gcode += f'{variables["POSTAMBLE"]}{nl}'
+            continue
+
+    #   Store relavent values.
+
+        if "G" in line:
+            cur_state["G"] = (re.search(r"G.*?(?=\s)", line)).group()
+            g_word = f'{cur_state["G"]} '
+
+        if "X" in line:
+            cur_state["X"] = (re.search(r"X.*?(?=\s)", line)).group()
+            x_word = f'{cur_state["X"]} '
+
+        if "Y" in line:
+            cur_state["Y"] = (re.search(r"Y.*?(?=\s)", line)).group()
+            y_word = f'{cur_state["Y"]} '
+
+        if "Z" in line:
+            cur_state["Z"] = (re.search(r"Z.*?(?=\s)", line)).group()
+            z_word = f'{cur_state["Z"]} '
+
+        if "I" in line:
+            i_word = (re.search(r"I.*?(?=\s)", line)).group() + " "
+
+        if "J" in line:
+            j_word = (re.search(r"J.*?(?=\s)", line)).group() + " "
+
+        if "F" in line:
+            cur_state["F"] = (re.search(r"F.*?(?=\s)", line)).group()
+            f_word = f'{cur_state["F"]} '
+
+    #   Feedrate semi-modal. Freedrate is printed at the beginning of each motion contolled group.
+
+        if  cur_state["F"] == prev_state["F"] and prev_state["G"] != "G0":
+            f_word = ""
+
+    #   Remove redundent moves created when ignoring the Z axis.
+
+        if "G0 " in line and prev_state["G"] in ["G0", "G1", "G2", "G3"]\
+            and cur_state["X"] == prev_state["X"] and cur_state["Y"] == prev_state["Y"]:
+                continue
+
+        elif "G1 " in line and prev_state["G"] in ["G0", "G1", "G2", "G3"]\
+            and cur_state["X"] == prev_state["X"] and cur_state["Y"] == prev_state["Y"]:
+                continue
+
+    #   Remove G0 moves that only include the Z axis.
+
+        elif "G0 " in line and "Z" in line and "X" not in line and "Y" not in line:
+            continue
+
+    #   Turn the laser on for feed controlled moves and off for rapid moves.
+    #   This code could be more compact, but I chose to avoid any nesting
+    #   to keep it easy to follow.
+
+        elif "G0 " in line and cur_state["LASER"] == "OFF":
+            temp_line += f"{g_word}{x_word}{y_word}{nl}"
+
+        elif "G0 " in line and cur_state["LASER"] == "ON":
+            cur_state["LASER"] = "OFF"                      #turn laser off
+            temp_line += f'{variables["LASER_OFF"]}{nl}'    #print laser off command
+            temp_line += f"{g_word}{x_word}{y_word}{nl}"    #print gcode line
+
+        elif "G1 " in line and cur_state["LASER"] == "ON":
+            temp_line += f"{g_word}{x_word}{y_word}{f_word}{nl}"
+
+        elif "G1 " in line and cur_state["LASER"] == "OFF":
+            cur_state["LASER"] = "ON"
+            temp_line += f'{variables["LASER_ON"]} {variables["LASER_POWER"]}{nl}'
+            temp_line += f"{g_word}{x_word}{y_word}{f_word}{nl}"
+
+        elif "G2 " in line or "G3 " in line and cur_state["LASER"] == "ON":
+            temp_line += f"{g_word}{x_word}{y_word}{i_word}{j_word}{f_word}{nl}"
+
+        elif "G2 " in line or "G3 " in line and cur_state["LASER"] == "OFF":
+            cur_state["LASER"] = "ON"
+            temp_line += f'{variables["LASER_ON"]} {variables["LASER_POWER"]}{nl}'
+            temp_line += f"{g_word}{x_word}{y_word}{i_word}{j_word}{f_word}{nl}"
+
+        else:
+            temp_line = line
+
+        temp_line = temp_line.replace(" \n", "\n")  #remove any trailing white space
+
+        if temp_line == prev_line:  #remove duplicate lines
+            continue
+
+        else:
+
+            prev_state = cur_state.copy()
+            prev_line = temp_line
+            temp_gcode += temp_line
+
+    if variables["OUTPUT_LINE_NUMBERS"]:
+
+        for line in temp_gcode.splitlines(True):
+
+            laser_gcode += linenumber(variables) + line
+    else:
+        laser_gcode = temp_gcode
+
+    return laser_gcode
 
 def export(objectslist, filename, argstring):
-    # pylint: disable=global-statement
-    if not processArguments(argstring):
-        return None
-    global UNITS
-    global UNIT_FORMAT
-    global UNIT_SPEED_FORMAT
-    global LASER_OFF
-    global PREAMBLE
-    global POSTAMBLE
 
-    for obj in objectslist:
-        if not hasattr(obj, "Path"):
-            print("the object " + obj.Name + " is not a path. Please select only path and Compounds.")
-            return None
+    parser = init_parser()
 
-    print("postprocessing...")
-    gcode = ""
+    variables = init_variables()
 
-    # write header
-    if OUTPUT_HEADER:
-        gcode += linenumber() + "(Exported by FreeCAD)\n"
-        gcode += linenumber() + "(Post Processor: " + __name__ + ")\n"
-        gcode += linenumber() + "(Output Time:" + str(now) + ")\n"
+    #   Format the argument string for our purposes before passing it on to
+    #   the imported postprocessor
 
-    # Write the preamble
-    if OUTPUT_COMMENTS:
-        gcode += linenumber() + "(begin preamble)\n"
+    new_argstring = parse_args(variables, argstring, parser)
 
-    # Add newline functionality to the command line input box. ";" for newline.
-    PREAMBLE = PREAMBLE.replace(";", "\n")
-    for line in PREAMBLE.splitlines(False):
-        gcode += linenumber() + line + "\n"
-    gcode += linenumber() + UNITS + "\n"
+    #   Call the imported postprocessor and format the output.
 
-    for obj in objectslist:
+    gcode = linuxcnc_post.export(objectslist, filename, new_argstring)
 
-        # Skip inactive operations
-        if hasattr(obj, 'Active'):
-            if not obj.Active:
-                continue
-        if hasattr(obj, 'Base') and hasattr(obj.Base, 'Active'):
-            if not obj.Base.Active:
-                continue
+    gcode = laser_gcode(gcode, variables)
 
-        # do the pre_op
-        if OUTPUT_COMMENTS:
-            gcode += linenumber() + "(begin operation: %s)\n" % obj.Label
-            gcode += linenumber() + "(machine units: %s)\n" % (UNIT_SPEED_FORMAT)
-        for line in PRE_OPERATION.splitlines(True):
-            gcode += linenumber() + line
-
-        # get coolant mode
-        coolantMode = 'None'
-        if hasattr(obj, "CoolantMode") or hasattr(obj, 'Base') and  hasattr(obj.Base, "CoolantMode"):
-            if hasattr(obj, "CoolantMode"):
-                coolantMode = obj.CoolantMode
-            else:
-                coolantMode = obj.Base.CoolantMode
-
-        # turn coolant on if required
-        if OUTPUT_COMMENTS:
-            if not coolantMode == 'None':
-                gcode += linenumber() + '(Coolant On:' + coolantMode + ')\n'
-        if coolantMode == 'Flood':
-            gcode  += linenumber() + 'M8' + '\n'
-        if coolantMode == 'Mist':
-            gcode += linenumber() + 'M7' + '\n'
-
-        # process the operation gcode
-        gcode += parse(obj)
-
-        # Make sure the laser is turned off after the last operation.
-        gcode+= LASER_OFF + "\n"
-
-        # do the post_op
-        if OUTPUT_COMMENTS:
-            gcode += linenumber() + "(finish operation: %s)\n" % obj.Label
-        for line in POST_OPERATION.splitlines(True):
-            gcode += linenumber() + line
-
-        # turn coolant off if required
-        if not coolantMode == 'None':
-            if OUTPUT_COMMENTS:
-                gcode += linenumber() + '(Coolant Off:' + coolantMode + ')\n'
-            gcode  += linenumber() +'M9' + '\n'
-
-    # do the post_amble
-    if OUTPUT_COMMENTS:
-        gcode += "(begin postamble)\n"
-
-    # Add newline functionality to the command line input box. ";" for newline.
-    POSTAMBLE = POSTAMBLE.replace(";", "\n")
-    for line in POSTAMBLE.splitlines(True):
-        gcode += linenumber() + line
-
-    ###### Reprocess the "raw" output for laser #######
-    gcode = laser_gcode(gcode, filename)
-
-    if FreeCAD.GuiUp and SHOW_EDITOR:
+    if FreeCAD.GuiUp and variables["SHOW_EDITOR"]:
         final = gcode
         if len(gcode) > 100000:
             print("Skipping editor since output is greater than 100kb")
@@ -284,231 +383,20 @@ def export(objectslist, filename, argstring):
                 final = dia.editor.toPlainText()
     else:
         final = gcode
-        
+
+    gcode_file = open(filename, "w")
+    gcode_file.write(final)
+    gcode_file.close()
+
     return final
 
-def laser_gcode(gcode, filename):
-    # pylint: disable=global-statement
-    global LINENR
-    global LASER_POWER
-    global LASER_ON
-    global LASER_OFF
+#   Generate popup tooltips for arguments
 
-    # Add newline functionality to the command line input box. ";" for newline.
-    LASER_OFF = LASER_OFF.replace(";", "\n")
-    LASER_ON = LASER_ON.replace(";", "\n")
+tooltip_parser = init_parser()
 
-    # Reset the line number. Line numbers are removed during reprocessing and
-    # added back in to avoid skipped numbers when removing lines.
-    LINENR = 100
+#   Use format_tooltips() to make popup help more readable
 
-    gfile = open(filename, "w")
-
-    isLaserOn = False
-    isFirstMove = True
-    modal_list = ['G0 ', 'G1 ', 'G2 ', 'G3 ']
-    last_line = ""
-    position = ['-1', '-1']
-    last_position = ['0', '0']
-    feed = ""
-    last_feed = ""
-    command = ""
-    last_command = ""
-
-    for line in gcode.splitlines(True): # Reprocess lines.
-
-        if line == last_line: # Remove any duplicate lines.
-            continue
-
-        # Remove G0 commands that only have Z moves if 2d laser.
-        if 'Z' in line and 'G0' in line and not LASER_3D:
-            if 'X' not in line and 'Y' not in line:
-                continue
-
-        # Remove unwanted M6 command. Tool changes add unwanted laser on commands.
-        if 'M6' in line:
-            line = "(Laser)"
-
-        gcode_line = line.split(" ")
-        parameter = ""
-        new_gcode_line = ""
-
-        # Store relavent commands and values, remove the rest.
-        for parameter in gcode_line:
-            if 'G' in parameter:
-                command = parameter
-            elif 'X' in parameter:
-                last_position[0] = position[0]
-                position[0] = parameter
-            elif 'Y' in parameter:
-                last_position[1] = position[1]
-                position[1] = parameter
-
-            # F value is only output if it changes by default.
-            # If --feed-non-modal is selected from the command line F value is output for all
-            # feed controlled moves.
-            elif 'F' in parameter:
-                feed = parameter
-                if feed == last_feed and last_command != 'G0' and not FEED_NON_MODAL:
-                    continue
-
-            # Remove first M3 command to avoid turning the laser on at program start.
-            elif 'M3' in parameter:
-                continue
-            elif 'S' in parameter: # Don't use default S values e.g after a tool change command.
-                continue
-            elif 'N' in parameter:
-                continue
-            elif 'Z' in parameter and not LASER_3D: # Remove Z moves if 2d laser.
-                continue
-            elif 'K' in parameter and not OUTPUT_K: # Output K values with --output-k on command line.
-                continue
-
-            if '\n' in parameter:
-                new_gcode_line += parameter # Don't add a space after the end of the line.
-            else:
-                new_gcode_line += parameter + " "
-
-            new_gcode_line = new_gcode_line.replace(" \n", "\n") # Remove trailing whitespace.
-
-        # 3d laser output, Z moves are retained but laser is only on during X Y motion.
-        if LASER_3D:
-            # Turn laser off for rapid moves. Don't toggle laser if first move.
-            if command == 'G0':
-                if isFirstMove:
-                    gfile.write(linenumber() + LASER_OFF + "\n")
-                    isFirstMove = False
-                if isLaserOn:
-                    gfile.write(linenumber() + LASER_OFF + "\n")
-                    isLaserOn = False
-
-            # Turn laser off if X and Y are stationary.
-            elif command == 'G1' and position == last_position:
-                gfile.write(linenumber() + LASER_OFF + "\n")
-                isLaserOn = False
-
-            # Turn laser on if X and Y are in motion.
-            elif command in ['G1', 'G2', 'G3'] and position != last_position:
-                if not isLaserOn:
-                    gfile.write(linenumber() + LASER_ON + " " + LASER_POWER + "\n")
-                    isLaserOn = True
-
-        # 2d laser output, all Z moves are removed.
-        else:
-            # Remove duplicate and redundant commands.
-            if command == 'G0' and last_command in ['G0', 'G1', 'G2', 'G3'] and position == last_position:
-                continue
-            elif command == 'G1' and last_command in ['G0', 'G1', 'G2', 'G3'] and position == last_position:
-                continue
-
-            # Turn laser off for rapid moves.
-            if command == 'G0':
-                gfile.write(linenumber() + LASER_OFF + "\n")
-
-            # Turn laser on for feed controlled moves.
-            elif command in ['G1', 'G2', 'G3'] and last_command == 'G0':
-                gfile.write(linenumber() + LASER_ON + " " + LASER_POWER + "\n")
-
-        last_feed = feed
-        last_line = line
-
-        # If --modal is selected from the command line, suppress duplicate commands.
-        for c in modal_list:
-            if command == last_command and c in new_gcode_line and MODAL:
-                new_gcode_line = new_gcode_line.replace(c, "")
-
-        last_command = command
-        gfile.write(linenumber() + new_gcode_line) # Write the line to file.
-    gfile.close()
-
-    #read back the laser processed gcode so we can optionally display it
-    gfile = open(filename, "r")
-    gcode = gfile.read()
-    gfile.close()
-
-    print("Done postprocessing.")
-
-    #return laser gcode
-    return gcode
-
-def linenumber():
-    # pylint: disable=global-statement
-    global LINENR
-    if OUTPUT_LINE_NUMBERS is True:
-        LINENR += 10
-        return "N" + str(LINENR) + " "
-    return ""
-
-def parse(pathobj):
-    # pylint: disable=global-statement
-    global PRECISION
-    global UNIT_FORMAT
-    global UNIT_SPEED_FORMAT
-    global LASER_POWER
-
-    out = ""
-
-    precision_string = '.' + str(PRECISION) + 'f'
-
-    # the order of parameters
-
-    params = ['X', 'Y', 'Z', 'A', 'B', 'C', 'I', 'J', 'K', 'F', 'S', 'T', 'Q', 'R', 'L', 'H', 'D', 'P']
-
-    if hasattr(pathobj, "Group"):  # We have a compound or project.
-        for p in pathobj.Group:
-            out += parse(p)
-        return out
-    else:  # parsing simple path
-
-        # groups might contain non-path things like stock.
-        if not hasattr(pathobj, "Path"):
-            return out
-
-        for c in pathobj.Path.Commands:
-
-            outstring = []
-            command = c.Name
-            outstring.append(command)
-
-            if c.Name[0] == '(' and not OUTPUT_COMMENTS: # command is a comment
-                continue
-
-            # Now add the remaining parameters in order
-            for param in params:
-                if param in c.Parameters:
-                    if param == 'F':
-                        if c.Name not in ["G0", "G00"]:
-                            speed = Units.Quantity(c.Parameters['F'], FreeCAD.Units.Velocity)
-                            if speed.getValueAs(UNIT_SPEED_FORMAT) > 0.0:
-                                outstring.append(param + format(float(speed.getValueAs(UNIT_SPEED_FORMAT)), precision_string))
-                        else:
-                            continue
-                    elif param in ['T', 'H', 'D', 'S', 'P', 'L']:
-
-                        # Store spindle speed(laser power). If --no-s is selected from the command line
-                        # the S value is suppressed.
-                        if param == 'S' and not NO_S:
-                            LASER_POWER = param + str(c.Parameters[param])
-                        else:
-                            outstring.append(param + str(c.Parameters[param]))
-                    else:
-                        pos = Units.Quantity(c.Parameters[param], FreeCAD.Units.Length)
-                        outstring.append(param + format(float(pos.getValueAs(UNIT_FORMAT)), precision_string))
-
-            if command == "message":
-                if OUTPUT_COMMENTS is False:
-                    out = []
-                else:
-                    outstring.pop(0)  # remove the command
-
-            if len(outstring) >= 1:
-                # append the line to the final output
-                for w in outstring:
-                    out += w + COMMAND_SPACE
-                # Note: Do *not* strip `out`, since that forces the allocation
-                # of a contiguous string & thus quadratic complexity.
-                out += "\n"
-
-        return out
+TOOLTIP_ARGS = format_tooltips(tooltip_parser.format_help())
 
 # print(__name__ + " gcode postprocessor loaded.")
+

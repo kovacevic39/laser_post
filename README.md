@@ -14,14 +14,12 @@ The following command line options have been added:
 
 <code>--laser-off</code> Overrides the default "M5" command for laser off.
 
-<code>--laser-on</code> Overrides the defalt "M3" command for laser on.
+<code>--laser-on</code> Overrides the default "M3" command for laser on.
 
-<code>--no-s</code> Suppresses "S" values after the laser on command.
-
-<code>--laser-3d</code> Allows Z moves but only turns the laser on if there is motion in X Y.  
-    So this can be used to cut over contours or step up or down between cuts.
+<code>--laser-power</code> Overrides the default "S####" command for laser on.
+--laser-power "" or --laser-power "NONE" suppresses the power command.
   
-  Use ";" for newlines.  
+  Use "\n" for newlines.
 
 **Examples :**
 <pre>
@@ -32,16 +30,21 @@ The following command line options have been added:
     M3 S900  for laser on
     M5  for laser off
   
-  --laser-on="M4" would produce:
+  --laser-on "M4" would produce:
        M4 S900
        
-  --laser-no-s --laser-on="Turn on;100%" would produce:
-       Turn on
-       100%
+  --laser-power "NONE" --laser-on "M4" would produce:
+       M4
+
+  --laser-on "G4 P1\nM3" --laser-power "\nfull power" would produce:
+       G4 P1
+       M3
+       full power
+
 </pre>  
 
 **Installation :**
-  
+
 * Copy **laser_post.py** to your macro directory
 * Select the laser post processor in your [Path job](https://wiki.freecad.org/Path_Job).
 
