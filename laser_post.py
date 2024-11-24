@@ -40,7 +40,7 @@ This is a postprocessor file for the Path workbench. Generate g-code that is com
 
 now = datetime.datetime.now()
 
-parser = argparse.ArgumentParser(prog="laser2", add_help=False)
+parser = argparse.ArgumentParser(prog="laser", add_help=False)
 parser.add_argument("--no-header", action="store_true", help="suppress header output")
 parser.add_argument("--no-comments", action="store_true", help="suppress comment output")
 parser.add_argument("--line-numbers", action="store_true", help="prefix with line numbers")
