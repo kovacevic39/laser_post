@@ -85,7 +85,7 @@ parser.add_argument(
 
 parser.add_argument(
     "--laser-power",
-    help='"Laser power command, use \\n for newline.Default is spindle speed "S####"Use "NONE" or "" to supress any power commands.',
+    help='"Laser power command, use \\n for newline.Default is spindle speed "S####"Use "NONE" or "" to suppress any power commands.',
 )
 
 TOOLTIP_ARGS = parser.format_help()
@@ -265,7 +265,7 @@ def laser_gcode(gcode):
             #temp_gcode += f'{variables["POSTAMBLE"]}{nl}'
             #continue
 
-    #   Store relavent values.
+    #   Store relevant values.
 
         if "G" in line:
             cur_state["G"] = (re.search(r"G.*?(?=\s)", line)).group()
@@ -293,12 +293,12 @@ def laser_gcode(gcode):
             cur_state["F"] = (re.search(r"F.*?(?=\s)", line)).group()
             f_word = f'{cur_state["F"]} '
 
-    #   Feedrate semi-modal. Freedrate is printed at the beginning of each motion contolled group.
+    #   Feedrate semi-modal. Freedrate is printed at the beginning of each motion controlled group.
 
         if  cur_state["F"] == prev_state["F"] and prev_state["G"] != "G0":
             f_word = ""
 
-    #   Remove redundent moves created when ignoring the Z axis.
+    #   Remove redundant moves created when ignoring the Z axis.
 
         if "G0 " in line and prev_state["G"] in ["G0", "G1", "G2", "G3"]\
             and cur_state["X"] == prev_state["X"] and cur_state["Y"] == prev_state["Y"]:
