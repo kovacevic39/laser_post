@@ -115,7 +115,7 @@ PRECISION = 3
 PREAMBLE = "G17 G90"
 
 # Postamble text will appear following the last operation.
-POSTAMBLE = "M5\nG17 G90\nM2"
+POSTAMBLE = "M5 G17 G90 M2"
 
 # Pre operation text will be inserted before every operation
 PRE_OPERATION = """"""
